@@ -1,17 +1,9 @@
--- This file was automatically generated for the LuaDist project.
-
 package = "tiny-ecs"
-version = "1.3-2"
--- LuaDist source
+version = "1.3-3"
 source = {
-  tag = "1.3-2",
-  url = "git://github.com/LuaDist-testing/tiny-ecs.git"
+   url = "git://github.com/bakpakin/tiny-ecs",
+   tag = version
 }
--- Original source
--- source = {
---    url = "git://github.com/bakpakin/tiny-ecs",
---    tag = "1.3-1"
--- }
 description = {
    summary = "Entity Component System for Lua.",
    detailed = [[

@@ -22,14 +22,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 --- @module tiny-ecs
 -- @author Calvin Rose
 -- @license MIT
--- @copyright 2015
-local tiny = { _VERSION = "1.3-1" }
+-- @copyright 2016
+local tiny = {}
 
 -- Local versions of standard lua functions
 local tinsert = table.insert
 local tremove = table.remove
 local tsort = table.sort
-local pairs = pairs
 local setmetatable = setmetatable
 local type = type
 local select = select
@@ -42,12 +41,13 @@ local tiny_addSystem
 local tiny_add
 local tiny_removeEntity
 local tiny_removeSystem
-local tiny_remove
 
 --- Filter functions.
 -- A Filter is a function that selects which Entities apply to a System.
 -- Filters take two parameters, the System and the Entity, and return a boolean
--- value indicating if the Entity should be processed by the System.
+-- value indicating if the Entity should be processed by the System. A truthy
+-- value includes the entity, while a falsey (nil or false) value excludes the
+-- entity.
 --
 -- Filters must be added to Systems by setting the `filter` field of the System.
 -- Filter's returned by tiny-ecs's Filter functions are immutable and can be
@@ -109,17 +109,18 @@ do
             if type(item) == 'string' then
                 accum[#accum + 1] = ("(e[%s] ~= nil)"):format(make_safe(item))
             elseif type(item) == 'function' then
-                build[#build + 1] = ('local subfilter_%d_ = select(%d, ...)'):format(i, i)
+                build[#build + 1] = ('local subfilter_%d_ = select(%d, ...)')
+                    :format(i, i)
                 accum[#accum + 1] = ('(subfilter_%d_(system, e))'):format(i)
             else
                 error 'Filter token must be a string or a filter function.'
             end
         end
-        local source = ('do %s\n return function(system, e) return %s(%s) end end'):format(
-            table.concat(build, '\n'),
-            prefix,
-            table.concat(accum, seperator)
-        )
+        local source = ('%s\nreturn function(system, e) return %s(%s) end')
+            :format(
+                table.concat(build, '\n'),
+                prefix,
+                table.concat(accum, seperator))
         local loader, err = loadstring(source)
         if err then error(err) end
         return loader(...)
@@ -137,12 +138,14 @@ do
             subParts[#subParts + 1] = buildPart(p:sub(2, -2))
             return ('\255%d'):format(#subParts)
         end)
-        for invert, part, sep in str:gmatch('(%!?)([^%|%&%!]+)([%|%&%!]?)') do
+        for invert, part, sep in str:gmatch('(%!?)([^%|%&%!]+)([%|%&]?)') do
             if part:match('^\255%d+$') then
                 local partIndex = tonumber(part:match(part:sub(2)))
-                accum[#accum + 1] = ('%s(%s)'):format(invert == '' and '' or 'not', subParts[partIndex])
+                accum[#accum + 1] = ('%s(%s)')
+                    :format(invert == '' and '' or 'not', subParts[partIndex])
             else
-                accum[#accum + 1] = ("(e[%s] %s nil)"):format(make_safe(part), invert == '' and '~=' or '==')
+                accum[#accum + 1] = ("(e[%s] %s nil)")
+                    :format(make_safe(part), invert == '' and '~=' or '==')
             end
             if sep ~= '' then
                 accum[#accum + 1] = (sep == '|' and ' or ' or ' and ')
@@ -152,7 +155,8 @@ do
     end
 
     function filterBuildString(str)
-        local source = ("return function(_, e) return %s end"):format(buildPart(str))
+        local source = ("return function(_, e) return %s end")
+            :format(buildPart(str))
         local loader, err = loadstring(source)
         if err then
             error(err)
@@ -190,11 +194,11 @@ end
 --
 --   * Tokens are alphanumeric strings including underscores.
 --   * Tokens can be separated by |, &, or surrounded by parentheses.
---   * Tokens can be prefixed with !, and are then operated on with a boolean 'not'.
+--   * Tokens can be prefixed with !, and are then inverted.
 --
 -- Examples are best:
---    'a|b|c' - Matches entities with an 'a' component OR a 'b' component or a 'c' component.
---    'a&!b&c' - Matches entities with an 'a' component AND NOT a 'b' component AND a 'c' component.
+--    'a|b|c' - Matches entities with an 'a' OR 'b' OR 'c'.
+--    'a&!b&c' - Matches entities with an 'a' AND NOT 'b' AND 'c'.
 --    'a|(b&c&d)|e - Matches 'a' OR ('b' AND 'c' AND 'd') OR 'e'
 -- @param pattern
 function tiny.filter(pattern)
@@ -224,6 +228,19 @@ end
 -- to the World, before any entities are added to the system.
 --   * `function system:onRemoveFromWorld(world)` - Called when the System is
 -- removed from the world, after all Entities are removed from the System.
+--   * `function system:preWrap(dt)` - Called on each system before update is
+-- called on any system.
+--   * `function system:postWrap(dt) - Called on each system in reverse order
+-- after update is called on each system. The idea behind `preWrap` and
+-- `postWrap` is to allow for systems that modify the behavior of other systems.
+-- Say there is a DrawingSystem, which draws sprites to the screen, and a
+-- PostProcessingSystem, that adds some blur and bloom effects. In the preWrap
+-- method of the PostProcessingSystem, the System could set the drawing target
+-- for the DrawingSystem to a special buffer instead the screen. In the postWrap
+-- method, the PostProcessingSystem could then modify the buffer and render it
+-- to the screen. In this setup, the PostProcessingSystem would be added to the
+-- World after the drawingSystem (A similar but less flexible behavior could
+-- be accomplished with a single custom update function in the DrawingSystem).
 --
 -- For Filters, it is convenient to use `tiny.requireAll` or `tiny.requireAny`,
 -- but one can write their own filters as well. Set the Filter of a System like
@@ -259,6 +276,14 @@ end
 -- in the next update, if it has one. This is usually managed by tiny-ecs, so
 -- users should mostly ignore this, too.
 --
+-- There is another option to (hopefully) increase performance in systems that
+-- have items added to or removed from them often, and have lots of entities in
+-- them.  Setting the `nocache' field of the system might improve performance.
+-- It is still experimental. There are some restriction to systems without
+-- caching, however.  * There is no `entities` table.  * Callbacks such onAdd,
+-- onRemove, and onModify will never be called * Noncached systems cannot be
+-- sorted (There is no entities list to sort).
+--
 -- @section System
 
 -- Use an empty table as a key for identifying Systems. Any table that contains
@@ -281,11 +306,22 @@ local function processingSystemUpdate(system, dt)
     end
 
     if process then
-        local entities = system.entities
-        local len = #entities
-        for i = 1, len do
-            local entity = entities[i]
-            process(system, entity, dt)
+        if system.nocache then
+            local entities = system.world.entityList
+            local filter = system.filter
+            if filter then
+                for i = 1, #entities do
+                    local entity = entities[i]
+                    if filter(system, entity) then
+                        process(system, entity, dt)
+                    end
+                end
+            end
+        else
+            local entities = system.entities
+            for i = 1, #entities do
+                process(system, entities[i], dt)
+            end
         end
     end
 
@@ -294,8 +330,8 @@ local function processingSystemUpdate(system, dt)
     end
 end
 
--- Sorts Systems by a function system.sort(entity1, entity2) on modify.
-local function sortedSystemOnModify(system, dt)
+-- Sorts Systems by a function system.sortDelegate(entity1, entity2) on modify.
+local function sortedSystemOnModify(system)
     local entities = system.entities
     local indices = system.indices
     local sortDelegate = system.sortDelegate
@@ -308,8 +344,7 @@ local function sortedSystemOnModify(system, dt)
     end
     tsort(entities, sortDelegate)
     for i = 1, #entities do
-        local entity = entities[i]
-        indices[entity] = i
+        indices[entities[i]] = i
     end
 end
 
@@ -386,9 +421,6 @@ local worldMetaTable
 function tiny.world(...)
     local ret = setmetatable({
 
-        -- List of Entities to add
-        entitiesToAdd = {},
-
         -- List of Entities to remove
         entitiesToRemove = {},
 
@@ -404,11 +436,9 @@ function tiny.world(...)
         -- Set of Entities
         entities = {},
 
-        -- Number of Entities in World
-        entityCount = 0,
-
         -- List of Systems
         systems = {}
+
     }, worldMetaTable)
 
     tiny_add(ret, ...)
@@ -422,13 +452,8 @@ end
 -- Also call this on Entities that have changed Components such that they
 -- match different Filters. Returns the Entity.
 function tiny.addEntity(world, entity)
-    if world.entities[entity] then
-        local e2c = world.entitiesToChange
-        e2c[#e2c + 1] = entity
-    else
-        local e2a = world.entitiesToAdd
-        e2a[#e2a + 1] = entity
-    end
+    local e2c = world.entitiesToChange
+    e2c[#e2c + 1] = entity
     return entity
 end
 tiny_addEntity = tiny.addEntity
@@ -460,7 +485,7 @@ function tiny.add(world, ...)
 end
 tiny_add = tiny.add
 
---- Removes an Entity to the World. Returns the Entity.
+--- Removes an Entity from the World. Returns the Entity.
 function tiny.removeEntity(world, entity)
     local e2r = world.entitiesToRemove
     e2r[#e2r + 1] = entity
@@ -492,7 +517,6 @@ function tiny.remove(world, ...)
     end
     return ...
 end
-tiny_remove = tiny.remove
 
 -- Adds and removes Systems that have been marked from the World.
 function tiny_manageSystems(world)
@@ -506,7 +530,7 @@ function tiny_manageSystems(world)
     world.systemsToAdd = {}
     world.systemsToRemove = {}
 
-    local entities = world.entities
+    local worldEntityList = world.entities
     local systems = world.systems
 
     -- Remove Systems
@@ -514,7 +538,7 @@ function tiny_manageSystems(world)
         local system = s2r[i]
         local index = system.index
         local onRemove = system.onRemove
-        if onRemove then
+        if onRemove and not system.nocache then
             local entityList = system.entities
             for j = 1, #entityList do
                 onRemove(system, entityList[j])
@@ -540,11 +564,11 @@ function tiny_manageSystems(world)
     -- Add Systems
     for i = 1, #s2a do
         local system = s2a[i]
-        if systems[system.index] ~= system then
-            local entityList = {}
-            local entityIndices = {}
-            system.entities = entityList
-            system.indices = entityIndices
+        if systems[system.index or 0] ~= system then
+            if not system.nocache then
+                system.entities = {}
+                system.indices = {}
+            end
             if system.active == nil then
                 system.active = true
             end
@@ -559,16 +583,21 @@ function tiny_manageSystems(world)
             end
 
             -- Try to add Entities
-            local onAdd = system.onAdd
-            local filter = system.filter
-            if filter then
-                for entity in pairs(entities) do
-                    if filter(system, entity) then
-                        local entityIndex = #entityList + 1
-                        entityList[entityIndex] = entity
-                        entityIndices[entity] = entityIndex
-                        if onAdd then
-                            onAdd(system, entity)
+            if not system.nocache then
+                local entityList = system.entities
+                local entityIndices = system.indices
+                local onAdd = system.onAdd
+                local filter = system.filter
+                if filter then
+                    for j = 1, #worldEntityList do
+                        local entity = worldEntityList[j]
+                        if filter(system, entity) then
+                            local entityIndex = #entityList + 1
+                            entityList[entityIndex] = entity
+                            entityIndices[entity] = entityIndex
+                            if onAdd then
+                                onAdd(system, entity)
+                            end
                         end
                     end
                 end
@@ -581,29 +610,32 @@ end
 -- Adds, removes, and changes Entities that have been marked.
 function tiny_manageEntities(world)
 
-    local e2a = world.entitiesToAdd
     local e2r = world.entitiesToRemove
     local e2c = world.entitiesToChange
 
     -- Early exit
-    if #e2a == 0 and #e2r == 0 and #e2c == 0 then
+    if #e2r == 0 and #e2c == 0 then
         return
     end
 
     world.entitiesToChange = {}
-    world.entitiesToAdd = {}
     world.entitiesToRemove = {}
 
     local entities = world.entities
     local systems = world.systems
-    local entityCount = world.entityCount
 
     -- Change Entities
     for i = 1, #e2c do
         local entity = e2c[i]
-        if entities[entity] then
-            for j = 1, #systems do
-                local system = systems[j]
+        -- Add if needed
+        if not entities[entity] then
+            local index = #entities + 1
+            entities[entity] = index
+            entities[index] = entity
+        end
+        for j = 1, #systems do
+            local system = systems[j]
+            if not system.nocache then
                 local ses = system.entities
                 local seis = system.indices
                 local index = seis[entity]
@@ -639,59 +671,38 @@ function tiny_manageEntities(world)
     -- Remove Entities
     for i = 1, #e2r do
         local entity = e2r[i]
-        if entities[entity] then
-            entities[entity] = nil
-            entityCount = entityCount - 1
-            for j = 1, #systems do
-                local system = systems[j]
-                local ses = system.entities
-                local seis = system.indices
-                local index = seis[entity]
-                if index then
-                    system.modified = true
-                    local tmpEntity = ses[#ses]
-                    ses[index] = tmpEntity
-                    seis[tmpEntity] = index
-                    seis[entity] = nil
-                    ses[#ses] = nil
-                    local onRemove = system.onRemove
-                    if onRemove then
-                        onRemove(system, entity)
-                    end
-                end
-            end
-        end
         e2r[i] = nil
-    end
-
-    -- Add Entities
-    for i = 1, #e2a do
-        local entity = e2a[i]
-        if not entities[entity] then
-            entities[entity] = true
-            entityCount = entityCount + 1
+        local listIndex = entities[entity]
+        if listIndex then
+            -- Remove Entity from world state
+            local lastEntity = entities[#entities]
+            entities[lastEntity] = listIndex
+            entities[entity] = nil
+            entities[listIndex] = lastEntity
+            entities[#entities] = nil
+            -- Remove from cached systems
             for j = 1, #systems do
                 local system = systems[j]
-                local ses = system.entities
-                local seis = system.indices
-                local filter = system.filter
-                if filter and filter(system, entity) then
-                    system.modified = true
-                    local index = #ses + 1
-                    ses[index] = entity
-                    seis[entity] = index
-                    local onAdd = system.onAdd
-                    if onAdd then
-                        onAdd(system, entity)
+                if not system.nocache then
+                    local ses = system.entities
+                    local seis = system.indices
+                    local index = seis[entity]
+                    if index then
+                        system.modified = true
+                        local tmpEntity = ses[#ses]
+                        ses[index] = tmpEntity
+                        seis[tmpEntity] = index
+                        seis[entity] = nil
+                        ses[#ses] = nil
+                        local onRemove = system.onRemove
+                        if onRemove then
+                            onRemove(system, entity)
+                        end
                     end
                 end
             end
         end
-        e2a[i] = nil
     end
-
-    -- Update Entity count
-    world.entityCount = entityCount
 end
 
 --- Manages Entities and Systems marked for deletion or addition. Call this
@@ -700,6 +711,17 @@ end
 function tiny.refresh(world)
     tiny_manageSystems(world)
     tiny_manageEntities(world)
+    local systems = world.systems
+    for i = #systems, 1, -1 do
+        local system = systems[i]
+        if system.active then
+            local onModify = system.onModify
+            if onModify and system.modified then
+                onModify(system, 0)
+            end
+            system.modified = false
+        end
+    end
 end
 
 --- Updates the World by dt (delta time). Takes an optional parameter, `filter`,
@@ -713,16 +735,27 @@ function tiny.update(world, dt, filter)
 
     local systems = world.systems
 
-    --  Iterate through Systems IN ORDER
-    for i = 1, #systems do
+    -- Iterate through Systems IN REVERSE ORDER
+    for i = #systems, 1, -1 do
         local system = systems[i]
-        if system.active and ((not filter) or filter(world, system)) then
-
+        if system.active then
             -- Call the modify callback on Systems that have been modified.
             local onModify = system.onModify
             if onModify and system.modified then
                 onModify(system, dt)
             end
+            local preWrap = system.preWrap
+            if preWrap and
+                ((not filter) or filter(world, system)) then
+                preWrap(system, dt)
+            end
+        end
+    end
+
+    --  Iterate through Systems IN ORDER
+    for i = 1, #systems do
+        local system = systems[i]
+        if system.active and ((not filter) or filter(world, system)) then
 
             -- Update Systems that have an update method (most Systems)
             local update = system.update
@@ -732,9 +765,7 @@ function tiny.update(world, dt, filter)
                     local bufferedTime = (system.bufferedTime or 0) + dt
                     while bufferedTime >= interval do
                         bufferedTime = bufferedTime - interval
-                        if update then
-                            update(system, interval)
-                        end
+                        update(system, interval)
                     end
                     system.bufferedTime = bufferedTime
                 else
@@ -745,12 +776,24 @@ function tiny.update(world, dt, filter)
             system.modified = false
         end
     end
+
+    -- Iterate through Systems IN ORDER AGAIN
+    for i = 1, #systems do
+        local system = systems[i]
+        local postWrap = system.postWrap
+        if postWrap and system.active and
+            ((not filter) or filter(world, system)) then
+            postWrap(system, dt)
+        end
+    end
+
 end
 
 --- Removes all Entities from the World.
 function tiny.clearEntities(world)
-    for e in pairs(world.entities) do
-        tiny_removeEntity(world, e)
+    local el = world.entities
+    for i = 1, #el do
+        tiny_removeEntity(world, el[i])
     end
 end
 
@@ -764,18 +807,12 @@ end
 
 --- Gets number of Entities in the World.
 function tiny.getEntityCount(world)
-    return world.entityCount
+    return #world.entities
 end
 
 --- Gets number of Systems in World.
 function tiny.getSystemCount(world)
-    return #(world.systems)
-end
-
---- Gets the index of the System in the World.
--- A simpler alternative is `system.index`.
-function tiny.getSystemIndex(world, system)
-    return system.index
+    return #world.systems
 end
 
 --- Sets the index of a System in the World, and returns the old index. Changes
@@ -814,10 +851,9 @@ worldMetaTable = {
         clearSystems = tiny.clearSystems,
         getEntityCount = tiny.getEntityCount,
         getSystemCount = tiny.getSystemCount,
-        getSystemIndex = tiny.getSystemIndex,
         setSystemIndex = tiny.setSystemIndex
     },
-    __tostring = function(self)
+    __tostring = function()
         return "<tiny-ecs_World>"
     end
 }

@@ -233,9 +233,11 @@ describe('tiny-ecs:', function()
         end)
 
         it("Remove Entities Multiple Times", function()
+            assert.equals(3, world:getEntityCount())
             world:update(1)
             world:remove(entity1, entity2, entity3)
             world:update(2)
+            assert.equals(0, world:getEntityCount())
             world:remove(entity1, entity2, entity3)
             world:update(2)
             assert.equals(2, world:getSystemCount())
@@ -270,15 +272,36 @@ describe('tiny-ecs:', function()
 
         it("Sorts Entities in Sorting Systems", function()
             local sortsys = tiny.sortedProcessingSystem()
-            sortsys.filter = tiny.requireAll("vel")
+            sortsys.filter = tiny.filter("vel|xform")
             function sortsys:compare(e1, e2)
                 return e1.vel.x < e2.vel.x
             end
             world:add(sortsys)
-            world:update(0)
+            world:refresh()
             assert.equals(sortsys.entities[1], entity2)
             assert.equals(sortsys.entities[2], entity3)
             assert.equals(sortsys.entities[3], entity1)
+        end)
+
+        it("Runs preWrap and postWrap for systems.", function()
+            local str = ""
+            local sys1 = tiny.system()
+            local sys2 = tiny.system()
+            function sys1:preWrap(dt)
+                str = str .. "<"
+            end
+            function sys2:preWrap(dt)
+                str = str .. "{"
+            end
+            function sys1:postWrap(dt)
+                str = str .. ">"
+            end
+            function sys2:postWrap(dt)
+                str = str .. "}"
+            end
+            world:add(sys1, sys2)
+            world:update(1)
+            assert.equals(str, "{<>}")
         end)
 
     end)
