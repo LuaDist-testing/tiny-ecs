@@ -1,10 +1,34 @@
+--[[
+Copyright (c) 2015 Calvin Rose
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+]]
+
 --- @module tiny-ecs
 -- @author Calvin Rose
-local tiny = { _VERSION = "1.0-2" }
+-- @license MIT
+-- @copyright 2015
+local tiny = { _VERSION = "1.1-1" }
 
 -- Local versions of standard lua functions
 local tinsert = table.insert
 local tremove = table.remove
+local tsort = table.sort
 local pairs = pairs
 local ipairs = ipairs
 local setmetatable = setmetatable
@@ -22,20 +46,49 @@ local tiny_remove
 
 --- Filter functions.
 -- A Filter is a function that selects which Entities apply to a System.
+-- Filters take two parameters, the System and the Entity, and return a boolean
+-- value indicating if the Entity should be processed by the System.
+--
+-- Filters must be added to Systems by setting the `filter` field of the System.
+-- Filter's returned by `tiny.requireAll` and `tiny.requireOne` are immutable
+-- and can be used by multiple Systems.
+--
+--    local f1 = tiny.requireAll("position", "velocity", "size")
+--    local f2 = tiny.requireOne("position", "velocity", "size")
+--
+--    local e1 = {
+--        position = {2, 3},
+--        velocity = {3, 3},
+--        size = {4, 4}
+--    }
+--
+--    local entity2 = {
+--        position = {4, 5},
+--        size = {4, 4}
+--    }
+--
+--    local e3 = {
+--        position = {2, 3},
+--        velocity = {3, 3}
+--    }
+--
+--    print(f1(nil, e1), f1(nil, e2), f1(nil, e3)) -- prints true, false, false
+--    print(f2(nil, e1), f2(nil, e2), f2(nil, e3)) -- prints true, true, true
+--
 -- @section Filter
 
---- Makes a Filter that filters Entities with specified Components.
--- An Entity must have all Components to match the filter.
--- @param ... List of Components
+--- Makes a Filter that selects Entities with all specified Components and
+-- Filters.
+-- @param ... List of required Components and other Filters.
 function tiny.requireAll(...)
     local components = {...}
     local len = #components
-    return function(_, e)
+    return function(system, e)
         local c
         for i = 1, len do
             c = components[i]
             if type(c) == 'function' then
-                if not c(_, e) then
+                if not c(system, e) then
                     return false
                 end
             elseif e[c] == nil then
@@ -46,18 +99,18 @@ function tiny.requireAll(...)
     end
 end
 
---- Makes a Filter that filters Entities with specified Components.
--- An Entity must have at least one specified Component to match the filter.
--- @param ... List of Components
+--- Makes a Filter that selects Entities with at least one of the specified
+-- Components and Filters.
+-- @param ... List of required Components and other Filters.
 function tiny.requireOne(...)
     local components = {...}
     local len = #components
-    return function(_, e)
+    return function(system, e)
         local c
         for i = 1, len do
             c = components[i]
             if type(c) == 'function' then
-                if c(_, e) then
+                if c(system, e) then
                     return true
                 end
             elseif e[c] ~= nil then
@@ -81,34 +134,44 @@ local function isSystem(table)
     return table[systemTableKey]
 end
 
---- Creates a System. Systems are tables that contain at least one field; 
--- an update function that takes parameters like so: 
--- `function system:update(entities, dt)`. `entities` is an unordered table of 
--- Entities with Entities as KEYS, and `dt` is the delta time. There are also a 
--- few other optional callbacks:
--- `function system:filter(entity)` - returns a boolean,
--- `function system:onAdd(entity)` - returns nil,
--- `function system:onRemove(entity)` - returns nil.
+--- Creates a System. Systems are tables that contain at least one method;
+-- an update function that takes parameters like so:
+--
+--   * `function system:update(dt)`.
+--
+-- There are also a few other optional callbacks:
+--
+--   * `function system:filter(entity)`
+--   * `function system:onAdd(entity)`
+--   * `function system:onRemove(entity)`
+--   * `function system:onModify(dt)`
+--
 -- For Filters, it is conveient to use `tiny.requireAll` or `tiny.requireOne`,
--- but one can write their own filters as well.
+-- but one can write their own filters as well. Set the Filter of your System
+-- like so:
+--    system.filter = tiny.requireAll("a", "b", "c")
+-- or
+--    function system:filter(entity)
+--        return entity.myRequiredComponentName ~= nil
+--    end
+--
 -- @param table A table to be used as a System, or `nil` to create a new System.
 function tiny.system(table)
-    if table == nil then
-        table = {}
-    end
+    table = table or {}
     table[systemTableKey] = true
     return table
 end
 
 -- Update function for all Processing Systems.
-local function processingSystemUpdate(system, entities, dt)
+local function processingSystemUpdate(system, dt)
+    local entities = system.entities
     local preProcess = system.preProcess
     local process = system.process
     local postProcess = system.postProcess
     local entity
 
     if preProcess then
-        preProcess(system, entities, dt)
+        preProcess(system, dt)
     end
 
     if process then
@@ -120,38 +183,83 @@ local function processingSystemUpdate(system, entities, dt)
     end
 
     if postProcess then
-        postProcess(system, entities, dt)
+        postProcess(system, dt)
     end
 end
 
---- Creates a Processing System. A Processing System iterates through its 
--- Entities in no particluar order, and updates them individually. It has two 
--- important fields, `function system:process(entity, dt)`, and `function 
--- system:filter(entity)`. `entities` is Entities, 
--- and `dt` is the delta time. There are also a few other 
--- optional callbacks:
--- `function system:preProcess(entities, dt)` - returns nil,
--- `function system:postProcess(entities, dt)` - returns nil,
--- `function system:onAdd(entity)` - returns nil,
--- `function system:onRemove(entity)` - returns nil.
--- For Filters, it is conveient to use `tiny.requireAll` or `tiny.requireOne`,
--- but one can write their own filters as well.
--- @param table A table to be used as a System, or `nil` to create a new 
+--- Creates a Processing System.
+--
+-- A Processing System iterates through its Entities in no particluar order, and
+-- updates them individually. It has two important fields:
+--
+--   * `function system:process(entity, dt)`
+--   * `function system:filter(entity)`
+--
+-- There are also a few other optional callbacks, including the optional
+-- callbacks in `tiny.system`:
+--
+--   * `function system:preProcess(entities, dt)`
+--   * `function system:postProcess(entities, dt)`
+--
+-- @param table A table to be used as a System, or `nil` to create a new
 -- Processing System.
+-- @see system
 function tiny.processingSystem(table)
-    if table == nil then
-        table = {}
-    end
+    table = table or {}
     table[systemTableKey] = true
     table.update = processingSystemUpdate
     return table
 end
 
+-- Sorts Systems by a function system.sort(entity1, entity2) on modify.
+local function sortedSystemOnModify(system, dt)
+    local entities = system.entities
+    local entityIndices = system.entityIndices
+    local sortDelegate = system.sortDelegate
+    if not sortDelegate then
+        local compare = system.compare
+        sortDelegate = function(e1, e2)
+            compare(system, e1, e2)
+        end
+        system.sortDelegate = sortDelegate
+    end
+    tsort(entities, sortDelegate)
+    for i = 1, #entities do
+        local entity = entities[i]
+        entityIndices[entity] = i
+    end
+end
+
+--- Creates a Sorted Processing System. A Sorted System iterates through its
+-- Entities in a specific order, and updates them individually. It has three
+-- important methods:
+--
+--   * `function system:process(entity, dt)`
+--   * `function system:compare(entity1, entity2)`
+--   * `function system:filter(entity)`
+--
+-- Sorted Systems have the same optitonal callbacks as ProcessingSystems.
+-- @param table A table to be used as a System, or `nil` to create a new
+-- Sorted System.
+-- @see system
+-- @see processingSystem
+function tiny.sortedSystem(table)
+    table = table or {}
+    table[systemTableKey] = true
+    table.update = processingSystemUpdate
+    table.onModify = sortedSystemOnModify
+    table.sort = sortedSystemOnModify
+    return table
+end
+
 --- World functions.
--- A World is a container that manages Entities and Systems. The tiny-ecs module
--- is set to be the `__index` of all World tables, so the often clearer syntax of
--- World:method can be used for any function in the library. For example,
--- `tiny.add(world, e1, e2, e3)` is the same as `world:add(e1, e2, e3).`
+-- A World is a container that manages Entities and Systems. Typically, a
+-- program uses one World at a time.
+--
+-- The tiny-ecs module is set to be the `__index` of all World tables, so the
+-- often clearer syntax of `world:method()` can be used for any function in the
+-- library. For example, `tiny.add(world, e1, e2, e3)` is the same as
+-- `world:add(e1, e2, e3).`
 -- @section World
 
 local worldMetaTable = { __index = tiny }
@@ -176,7 +284,7 @@ function tiny.world(...)
         -- List of Entities to remove
         systemsToRemove = {},
 
-        -- Set of Entities 
+        -- Set of Entities
         entities = {},
 
         -- Number of Entities in World.
@@ -199,9 +307,8 @@ function tiny.world(...)
 end
 
 --- Adds an Entity to the world.
--- The new Entity will enter the world next time World:update is called.
--- Also call this on Entities that have changed Components such that it 
--- matches different systems.
+-- Also call this on Entities that have changed Components such that they
+-- match different Filters.
 -- @param world
 -- @param entity
 function tiny.addEntity(world, entity)
@@ -214,7 +321,6 @@ end
 tiny_addEntity = tiny.addEntity
 
 --- Adds a System to the world.
--- The new System will enter the world next time World:update is called.
 -- @param world
 -- @param system
 function tiny.addSystem(world, system)
@@ -224,11 +330,10 @@ end
 tiny_addSystem = tiny.addSystem
 
 --- Shortcut for adding multiple Entities and Systems to the World.
--- New objects will enter the World the next time World:update(dt) is called.
--- Also call this method when an Entity has had its Components changed, such
--- that it matches different Filters.
 -- @param world
 -- @param ... Systems and Entities
+-- @see addEntity
+-- @see addSystem
 function tiny.add(world, ...)
     local args = {...}
     for _, obj in ipairs(args) do
@@ -242,9 +347,6 @@ end
 tiny_add = tiny.add
 
 --- Removes an Entity to the World.
--- The Entity will exit the World next time World:update is called.
--- Also call this on Entities that have changed Components such that it 
--- matches different systems.
 -- @param world
 -- @param entity
 function tiny.removeEntity(world, entity)
@@ -254,7 +356,6 @@ end
 tiny_removeEntity = tiny.removeEntity
 
 --- Removes a System from the world.
--- The System will exit the World next time World:update is called.
 -- @param world
 -- @param system
 function tiny.removeSystem(world, system)
@@ -263,10 +364,11 @@ function tiny.removeSystem(world, system)
 end
 tiny_removeSystem = tiny.removeSystem
 
---- Shortcut for removing multiple Entities and Systems from the World. 
--- Objects will exit the World the next time World:update(dt) is called.
+--- Shortcut for removing multiple Entities and Systems from the World.
 -- @param world
 -- @param ... Systems and Entities
+-- @see removeEntity
+-- @see removeSystem
 function tiny.remove(world, ...)
     local args = {...}
     for _, obj in ipairs(args) do
@@ -279,19 +381,8 @@ function tiny.remove(world, ...)
 end
 tiny_remove = tiny.remove
 
---- Updates a System.
--- @param world
--- @param system A System in the World to update
--- @param dt Delta time
-function tiny.updateSystem(world, system, dt)
-    local es = world.systemEntities[system]
-    system:update(es, dt)
-end
-
---- Adds and removes Systems that have been marked from the World.
--- The user of this library should seldom if ever call this.
--- @param world
-function tiny.manageSystems(world)
+-- Adds and removes Systems that have been marked from the World.
+function tiny_manageSystems(world)
 
         local s2a, s2r = world.systemsToAdd, world.systemsToRemove
 
@@ -303,18 +394,17 @@ function tiny.manageSystems(world)
         local systemIndices = world.systemIndices
         local entities = world.entities
         local systems = world.systems
-
-        local system, systemData, index, filter, entityList, entityIndices, entityIndex, onRemove, onAdd
+        local system, index, filter
+        local entityList, entityIndices, entityIndex, onRemove, onAdd
 
         -- Remove Systems
         for i = 1, #s2r do
             system = s2r[i]
             index = systemIndices[system]
             if index then
-                systemData = systems[index]
                 onRemove = system.onRemove
                 if onRemove then
-                    entityList = systemData.entities
+                    entityList = system.entities
                     for j = 1, #entityList do
                         onRemove(system, entityList[j])
                     end
@@ -322,7 +412,7 @@ function tiny.manageSystems(world)
                 systemIndices[system] = nil
                 tremove(systems, index)
                 for j = index, #systems do
-                    systemIndices[systems[j].system] = j
+                    systemIndices[systems[j]] = j
                 end
             end
             s2r[i] = nil
@@ -334,10 +424,13 @@ function tiny.manageSystems(world)
             if not systemIndices[system] then
                 entityList = {}
                 entityIndices = {}
-                systemData = { system = system, entities = entityList, indices = entityIndices, active = true }
+                system.entities = entityList
+                system.indices = entityIndices
+                system.active = true
+                system.modified = true
                 index = #systems + 1
                 systemIndices[system] = index
-                systems[index] = systemData
+                systems[index] = system
 
                 -- Try to add Entities
                 onAdd = system.onAdd
@@ -359,12 +452,9 @@ function tiny.manageSystems(world)
         end
 
 end
-tiny_manageSystems = tiny.manageSystems
 
---- Adds and removes Entities that have been marked.
--- The user of this library should seldom if ever call this.
--- @param world
-function tiny.manageEntities(world)
+-- Adds and removes Entities that have been marked.
+function tiny_manageEntities(world)
 
     local e2a, e2r = world.entitiesToAdd, world.entitiesToRemove
 
@@ -376,7 +466,8 @@ function tiny.manageEntities(world)
     local entities = world.entities
     local systems = world.systems
     local entityCount = world.entityCount
-    local entity, system, systemData, index, onRemove, onAdd, ses, seis, filter, tmpEntity
+    local entity, system, index
+    local onRemove, onAdd, ses, seis, filter, tmpEntity
 
     -- Remove Entities
     for i = 1, #e2r do
@@ -385,13 +476,13 @@ function tiny.manageEntities(world)
             entities[entity] = nil
 
             for j = 1, #systems do
-                systemData = systems[j]
-                system = systemData.system
-                ses = systemData.entities
-                seis = systemData.indices
+                system = systems[j]
+                ses = system.entities
+                seis = system.indices
                 index = seis[entity]
 
                 if index then
+                    system.modified = true
                     tmpEntity = ses[#ses]
                     ses[index] = tmpEntity
                     seis[tmpEntity] = index
@@ -418,12 +509,12 @@ function tiny.manageEntities(world)
             entities[entity] = true
 
             for j = 1, #systems do
-                systemData = systems[j]
-                system = systemData.system
-                ses = systemData.entities
-                seis = systemData.indices
+                system = systems[j]
+                ses = system.entities
+                seis = system.indices
                 filter = system.filter
                 if filter and filter(system, entity) then
+                    system.modified = true
                     index = #ses + 1
                     ses[index] = entity
                     seis[entity] = index
@@ -444,11 +535,9 @@ function tiny.manageEntities(world)
     world.entityCount = entityCount
 
 end
-tiny_manageEntities = tiny.manageEntities
 
 --- Updates the World.
--- Frees Entities that have been marked for freeing, adds
--- entities that have been marked for adding, etc.
+-- Put this in your main loop.
 -- @param world
 -- @param dt Delta time
 function tiny.update(world, dt)
@@ -457,20 +546,31 @@ function tiny.update(world, dt)
     tiny_manageEntities(world)
 
     local systems = world.systems
-    local systemData
+    local system, update, onModify, entities
 
     --  Iterate through Systems IN ORDER
     for i = 1, #systems do
-        systemData = systems[i]
-        if systemData.active then
-            systemData.system:update(systemData.entities, dt)
+        system = systems[i]
+        if system.active then
+
+            -- Call the modify callback on Systems that have been modified.
+            onModify = system.onModify
+            if onModify and system.modified then
+                onModify(system, dt)
+            end
+
+            --Update Systems that have an update method (most Systems)
+            update = system.update
+            if update then
+                update(system, dt)
+            end
+
+            system.modified = false
         end
     end
 end
 
 --- Removes all Entities from the World.
--- When World:update(dt) is next called,
--- all Entities will be removed.
 -- @param world
 function tiny.clearEntities(world)
     for e in pairs(world.entities) do
@@ -479,13 +579,11 @@ function tiny.clearEntities(world)
 end
 
 --- Removes all Systems from the World.
--- When World:update(dt) is next called,
--- all Systems will be removed.
 -- @param world
 function tiny.clearSystems(world)
     local systems = world.systems
     for i = #systems, 1, -1 do
-        tiny_removeSystem(world, systems[i].system)
+        tiny_removeSystem(world, systems[i])
     end
 end
 
@@ -501,7 +599,7 @@ function tiny.getSystemCount(world)
     return #(world.systems)
 end
 
---- Gets the index of a System in the world. Lower indexed Systems are processed
+--- Gets the index of a System in the World. Lower indexed Systems are processed
 -- before higher indexed systems.
 -- @param world
 -- @param system
@@ -509,8 +607,8 @@ function tiny.getSystemIndex(world, system)
     return world.systemIndices[system]
 end
 
---- Sets the index of a System in the world. Changes the order in
--- which they Systems processed, because lower indexed Systems are processed 
+--- Sets the index of a System in the World. Changes the order in
+-- which they Systems processed, because lower indexed Systems are processed
 -- first.
 -- @param world
 -- @param system
@@ -519,39 +617,13 @@ function tiny.setSystemIndex(world, system, index)
     local systemIndices = world.systemIndices
     local oldIndex = systemIndices[system]
     local systems = world.systems
-    local systemData = systems[oldIndex]
+    local system = systems[oldIndex]
 
     tremove(systems, oldIndex)
-    tinsert(systems, index, systemData)
+    tinsert(systems, index, system)
 
     for i = oldIndex, index, index >= oldIndex and 1 or -1 do
-        systemIndices[systems[i].system] = i
-    end
-end
-
---- Activates Systems in the World.
--- Activated Systems will be update whenever tiny.update(world, dt) is called.
--- @param world
--- @param ... Systems to activate. The Systems must already be added to the
--- World.
-function tiny.activate(world, ...)
-    local args = {...}
-    for _, system in ipairs(args) do
-        world.systems[world.systemIndices[system]].active = true
-    end
-end
-
---- Deactivates Systems in the World.
--- Deactivated Systems must be update manually, and will not update when the
--- rest of World updates. They will, however, process new Entities added while
--- the System is deactivated.
--- @param world
--- @param ... Systems to deactivate. The Systems must already be added to the
--- World.
-function tiny.deactivate(world, ...)
-    local args = {...}
-    for _, system in ipairs(args) do
-        world.systems[world.systemIndices[system]].active = false
+        systemIndices[systems[i]] = i
     end
 end
 
