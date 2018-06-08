@@ -56,7 +56,14 @@ describe('tiny-ecs:', function()
             local ftap = tiny.requireAll("spinalTap")
             local fvel = tiny.requireAll("vel")
             local fxform = tiny.requireAll("xform")
-            local fall = tiny.requireOne("spinalTap", "onlyTen", "littleMan")
+            local fall = tiny.requireAny("spinalTap", "onlyTen", "littleMan")
+
+            -- Only select Entities without "spinalTap"
+            local frtap = tiny.rejectAny("spinalTap")
+
+            -- Select Entities without all three: "spinalTap", "onlyTen", and
+            -- "littleMan"
+            local frall = tiny.rejectAll("spinalTap", "onlyTen", "littleMan")
 
             assert.truthy(fall(nil, entity1))
             assert.truthy(ftap(nil, entity1))
@@ -67,6 +74,14 @@ describe('tiny-ecs:', function()
             assert.truthy(fall(nil, entity1))
             assert.truthy(fall(nil, entity2))
             assert.truthy(fall(nil, entity3))
+
+            assert.falsy(frtap(nil, entity1))
+            assert.truthy(frtap(nil, entity2))
+            assert.truthy(frtap(nil, entity3))
+
+            assert.truthy(frall(nil, entity1))
+            assert.truthy(frall(nil, entity2))
+            assert.truthy(frall(nil, entity3))
 
         end)
 
