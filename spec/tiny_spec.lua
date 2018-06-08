@@ -1,3 +1,8 @@
+local GLOBALS = {}
+for k, v in pairs(_G) do
+    GLOBALS[k] = v
+end
+
 local tiny = require "tiny"
 
 local function deep_copy(x)
@@ -115,6 +120,11 @@ describe('tiny-ecs:', function()
             timePassed = 0
         end)
 
+        after_each(function()
+            world:clearSystems()
+            world:refresh()
+        end)
+
         it("Create World", function()
             assert.equals(world:getEntityCount(), 3)
             assert.equals(world:getSystemCount(), 2)
@@ -191,7 +201,7 @@ describe('tiny-ecs:', function()
 
         it("Add Systems Multiple Times", function()
             world:update(1)
-            world:add(moveSystem, oneTimeSystem)
+            assert.has_error(function() world:add(moveSystem, oneTimeSystem) end, "System already belongs to a World.")
             world:update(2)
             assert.equals(2, world:getSystemCount())
             assert.equals(3, world:getEntityCount())
@@ -201,7 +211,7 @@ describe('tiny-ecs:', function()
             world:update(1)
             world:remove(moveSystem)
             world:update(2)
-            world:remove(moveSystem)
+            assert.has_error(function() world:remove(moveSystem) end, "System does not belong to this World.")
             world:update(2)
             assert.equals(1, world:getSystemCount())
             assert.equals(3, world:getEntityCount())
@@ -228,6 +238,10 @@ describe('tiny-ecs:', function()
             assert.equals(sortsys.entities[3], entity1)
         end)
 
+    end)
+
+    it("Doesn't pollute the global namespace", function()
+        assert.are.same(_G, GLOBALS)
     end)
 
 end)
