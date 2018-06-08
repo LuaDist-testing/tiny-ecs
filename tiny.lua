@@ -23,7 +23,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 -- @author Calvin Rose
 -- @license MIT
 -- @copyright 2015
-local tiny = { _VERSION = "1.1-4" }
+local tiny = { _VERSION = "1.1-5" }
 
 -- Local versions of standard lua functions
 local tinsert = table.insert
@@ -286,11 +286,11 @@ end
 -- Systems process each entity individual, and are usually what is needed.
 -- Processing Systems have three extra callbacks besides those inheritted from
 -- vanilla Systems.
---     * `function system:preProcess(entities, dt)` - Called before iterating
--- over each Entity.
---     * `function system:process(entities, dt)` - Called for each Entity in
--- the System.
---     * `function system:postProcess(entity, dt)` - Called after iteration.
+--
+--     function system:preProcess(entities, dt) -- Called before iteration.
+--     function system:process(entities, dt) -- Process each entity.
+--     function system:postProcess(entity, dt) -- Called after iteration.
+--
 -- Processing Systems have their own `update` method, so don't implement a
 -- a custom `update` callback for Processing Systems.
 -- @see system
@@ -542,6 +542,7 @@ function tiny_manageEntities(world)
         entity = e2r[i]
         if entities[entity] then
             entities[entity] = nil
+            entityCount = entityCount - 1
 
             for j = 1, #systems do
                 system = systems[j]
@@ -556,7 +557,6 @@ function tiny_manageEntities(world)
                     seis[tmpEntity] = index
                     seis[entity] = nil
                     ses[#ses] = nil
-                    entityCount = entityCount - 1
                     onRemove = system.onRemove
                     if onRemove then
                         onRemove(system, entity)
@@ -574,6 +574,7 @@ function tiny_manageEntities(world)
         entity = e2a[i]
         if not entities[entity] then
             entities[entity] = true
+            entityCount = entityCount + 1
 
             for j = 1, #systems do
                 system = systems[j]
@@ -585,7 +586,6 @@ function tiny_manageEntities(world)
                     index = #ses + 1
                     ses[index] = entity
                     seis[entity] = index
-                    entityCount = entityCount + 1
                     onAdd = system.onAdd
                     if onAdd then
                         onAdd(system, entity)
