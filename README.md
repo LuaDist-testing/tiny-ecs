@@ -1,4 +1,7 @@
 # tiny-ecs #
+
+[![License](http://img.shields.io/badge/Licence-MIT-brightgreen.svg)](LICENSE)
+
 Tiny-ecs is an Entity Component System for lua that's simple, flexible, and useful.
 Because of lua's tabular nature, Entity Component Systems are a natural choice
 for simulating large and complex systems. For more explanation on Entity
@@ -75,7 +78,7 @@ Tiny-ecs is also on [Luarocks](https://luarocks.org/) and can be installed with
 ## Demo ##
 Check out the [demo](https://github.com/bakpakin/tiny-ecs/tree/demo-commandokibbles), a game
 originally written for Ludum Dare 32 with the theme 'An Unconventional Weapon'. The demo uses
-[LOVE](https://love2d.org/), an amazing game framework for lua.
+[LÖVE](https://love2d.org/), an amazing game framework for lua.
 
 ## Testing ##
 Tiny-ecs uses [busted](http://olivinelabs.com/busted/) for testing. Install and run
@@ -85,3 +88,4 @@ Tiny-ecs uses [busted](http://olivinelabs.com/busted/) for testing. Install and 
 See API [here](http://bakpakin.github.io/tiny-ecs/doc/).
 For the most up-to-date documentation, read the source code, or generate the HTML
 locally with [LDoc](http://stevedonovan.github.io/ldoc/).
+See the original forum thread [here](https://love2d.org/forums/viewtopic.php?f=5&t=79937&p=182589).
