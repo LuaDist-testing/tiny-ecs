@@ -23,7 +23,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 -- @author Calvin Rose
 -- @license MIT
 -- @copyright 2015
-local tiny = { _VERSION = "1.1-2" }
+local tiny = { _VERSION = "1.1-3" }
 
 -- Local versions of standard lua functions
 local tinsert = table.insert
@@ -720,6 +720,7 @@ worldMetaTable = {
         addSystem = tiny.addSystem,
         remove = tiny.remove,
         removeEntity = tiny.removeEntity,
+        removeSystem = tiny.removeSystem,
         update = tiny.update,
         clearEntities = tiny.clearEntities,
         clearSystems = tiny.clearSystems,
